@@ -1,3 +1,4 @@
+
 import React, { useState, useEffect, useMemo } from 'react';
 import { SUBJECT_DATA, COLOR_PALETTES } from '../constants';
 import { Copy, RefreshCw, Check, Sparkles, BookOpen, PenTool, Palette, Wand2, Loader2, RotateCcw, Search, CheckCircle2, X, History, Box, Square, Layers, Save } from 'lucide-react';
@@ -206,29 +207,84 @@ Lưu ý:
     });
   };
 
+  const getApiKeys = (): string[] => {
+    try {
+      const stored = localStorage.getItem('gemini_api_keys');
+      if (stored) {
+        const keys = JSON.parse(stored);
+        if (Array.isArray(keys) && keys.length > 0) return keys;
+      }
+    } catch (e) {
+      console.error("Error reading API keys", e);
+    }
+    // Fallback to environment variable if no custom keys
+    return process.env.API_KEY ? [process.env.API_KEY] : [];
+  };
+
   const handleGenerateAI = async () => {
     if (!generatedPrompt) return;
     
     setIsGenerating(true);
-    try {
-      const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
-      
-      const response = await ai.models.generateContent({
-        model: 'gemini-2.5-flash',
-        contents: generatedPrompt,
-      });
-      
-      if (response.text) {
-        const resultText = response.text;
-        setAiResponse(resultText);
-        addToHistory(resultText, true);
-      }
-    } catch (error) {
-      console.error("Error generating prompt with AI:", error);
-      alert("Có lỗi xảy ra khi kết nối với AI. Vui lòng thử lại sau.");
-    } finally {
+    const keys = getApiKeys();
+    
+    if (keys.length === 0) {
+      alert("Vui lòng cấu hình API Key trong phần cài đặt (biểu tượng bánh răng) để sử dụng tính năng này.");
       setIsGenerating(false);
+      return;
     }
+
+    let lastError: any = null;
+    let success = false;
+
+    // Try keys sequentially
+    for (let i = 0; i < keys.length; i++) {
+      const currentKey = keys[i];
+      try {
+        console.log(`Attempting generation with Key #${i + 1}`);
+        const ai = new GoogleGenAI({ apiKey: currentKey });
+        
+        const response = await ai.models.generateContent({
+          model: 'gemini-2.5-flash',
+          contents: generatedPrompt,
+        });
+        
+        if (response.text) {
+          const resultText = response.text;
+          setAiResponse(resultText);
+          addToHistory(resultText, true);
+          success = true;
+          break; // Stop loop on success
+        }
+      } catch (error: any) {
+        console.warn(`Key #${i + 1} failed:`, error);
+        lastError = error;
+        
+        // Check if error is related to Quota (429 or 503 or specific text)
+        const isQuotaError = 
+          error?.status === 429 || 
+          error?.message?.includes('429') || 
+          error?.message?.includes('Quota') ||
+          error?.message?.includes('Resource has been exhausted');
+
+        if (isQuotaError && i < keys.length - 1) {
+          console.log("Quota exceeded, switching to next key...");
+          continue; // Try next key
+        } else {
+          // If not a quota error, or no more keys, break and show error
+           if (!isQuotaError) break;
+        }
+      }
+    }
+
+    if (!success) {
+      console.error("All attempts failed", lastError);
+      const msg = lastError?.message?.includes('429') 
+        ? "Tất cả các API Key đều đã hết lượt sử dụng (Quota). Vui lòng thử lại sau hoặc thêm key mới." 
+        : "Có lỗi xảy ra khi kết nối với AI. Vui lòng kiểm tra API Key hoặc thử lại sau.";
+      alert(msg);
+    }
+    
+    setIsGenerating(false);
   };
 
   const handleReset = () => {
